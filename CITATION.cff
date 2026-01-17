@@ -15,7 +15,7 @@ identifiers:
     value: 10.5281/zenodo.18258034
     description: This DOI represents all software versions.
 repository-code: 'https://github.com/equicirco/JCGERuntime.jl'
-url: 'https://equicirco.github.io/JCGERuntime.jl/'
+url: 'https://runtime.jcge.org'
 abstract: >-
   JCGERuntime.jl builds and solves JCGE RunSpecs using JuMP and numerical solvers, providing diagnostics and execution utilities.
 keywords:

@@ -20,7 +20,7 @@ If you use this package, please cite:
 
 Boero, R. *JCGERuntime.jl - Runtime execution and solver integration for JCGE models.* [software], 2026.
 DOI: 10.5281/zenodo.18258034
-URL: https://equicirco.github.io/JCGERuntime.jl/
+URL: https://runtime.jcge.org
 SourceCode: https://github.com/equicirco/JCGERuntime.jl
 
 ```bibtex
@@ -29,7 +29,7 @@ SourceCode: https://github.com/equicirco/JCGERuntime.jl
   author = {Boero, Riccardo},
   year   = {2026},
   doi    = {10.5281/zenodo.18258034},
-  url    = {https://equicirco.github.io/JCGERuntime.jl/}
+  url    = {https://runtime.jcge.org}
 }
 ```
 
