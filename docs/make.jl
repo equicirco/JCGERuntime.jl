@@ -6,6 +6,7 @@ makedocs(
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", "false") == "true",
         assets = [
+            "assets/favicon.ico",
             "assets/deepwiki-chat.css",
             "assets/deepwiki-chat.js",
             "assets/logo-theme.js",
