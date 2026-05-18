@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 title: JCGERuntime.jl - Runtime execution and solver integration for JCGE models.
 message: >-
-  v0.1.0 - Initial public release.
+  v0.1.1 - Submodule for parameter and policy grids, batch execution, reference comparisons.
 type: software
 doi: 10.5281/zenodo.18258034
 authors:
