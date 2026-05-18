@@ -38,6 +38,20 @@ JCGERuntime.Experiments.assert_closure(rows;
 )
 ```
 
+For independent experiment solves, opt into process-based parallel execution:
+
+```julia
+records = JCGERuntime.Experiments.run_grid(specs;
+    runner = run_experiment,
+    execution = :distributed,
+    workers = 8,
+    worker_modules = [:MyModelPackage],
+)
+```
+
+Serial execution is the default. Distributed execution preserves row order and
+uses `worker_modules` to load model packages on worker processes.
+
 ## Compilation hooks
 
 Use `compile!` and `build_model!` for advanced workflows that need direct access

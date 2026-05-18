@@ -31,6 +31,21 @@ end
     end
     runs = Experiments.run_grid(specs; runner = runner, scale = 2.0)
     @test length(runs) == 2
+
+    distributed_runs = Experiments.run_grid(specs;
+        runner = runner,
+        scale = 2.0,
+        execution = :distributed,
+        workers = 2,
+        worker_modules = [:JuMP])
+    @test distributed_runs == runs
+
+    errored = Experiments.run_grid([(label = "bad",)];
+        runner = spec -> error("failed $(spec.label)"),
+        on_error = (spec, err) -> (label = spec.label, error = sprint(showerror, err)))
+    @test only(errored).label == "bad"
+    @test occursin("failed bad", only(errored).error)
+
     @test Experiments.closure_failures(runs;
         closure = :fiscal,
         residual_field = :max_abs_market_residual,

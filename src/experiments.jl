@@ -4,6 +4,7 @@ frontier selection, sensitivity screening, and CSV export.
 """
 module Experiments
 
+using Distributed
 using JuMP
 
 export assignment_label, grid_assignments
@@ -115,17 +116,99 @@ function parameter_policy_grid(factory::Function;
 end
 
 """
-    run_grid(specs; runner, kwargs...)
+    run_grid(specs; runner, execution=:serial, workers=nothing,
+        worker_modules=Symbol[], on_error=nothing, kwargs...)
 
 Run a batch of model-specific experiment objects. `runner` is called as
-`runner(spec; kwargs...)` for each spec.
+`runner(spec; kwargs...)` for each spec. Set `execution = :distributed` and
+`workers = N` to evaluate independent specs with process-based parallelism.
+Use `worker_modules` to load model packages on worker processes before running.
 """
-function run_grid(specs::AbstractVector; runner::Function, kwargs...)
-    return [runner(spec; kwargs...) for spec in specs]
+function run_grid(specs::AbstractVector;
+    runner::Function,
+    execution::Symbol = :serial,
+    workers = nothing,
+    worker_modules = Symbol[],
+    on_error = nothing,
+    kwargs...)
+    return _run_grid(specs, runner, NamedTuple(kwargs), execution, workers, worker_modules, on_error)
 end
 
 run_grid(runner::Function, specs::AbstractVector; kwargs...) =
-    [runner(spec; kwargs...) for spec in specs]
+    run_grid(specs; runner = runner, kwargs...)
+
+function _run_one(runner::Function, spec, kwargs::NamedTuple, on_error)
+    try
+        return runner(spec; kwargs...)
+    catch err
+        on_error === nothing && rethrow()
+        return on_error(spec, err)
+    end
+end
+
+function _run_grid(specs::AbstractVector,
+    runner::Function,
+    kwargs::NamedTuple,
+    execution::Symbol,
+    workers,
+    worker_modules,
+    on_error)
+    if execution in (:serial, :sequential)
+        return [_run_one(runner, spec, kwargs, on_error) for spec in specs]
+    elseif execution in (:distributed, :parallel)
+        worker_ids = _ensure_worker_ids(workers)
+        _prepare_workers(worker_ids, worker_modules)
+        pool = Distributed.CachingPool(worker_ids)
+        return Distributed.pmap(pool, specs) do spec
+            _run_one(runner, spec, kwargs, on_error)
+        end
+    end
+    error("Unknown execution mode $(execution). Use :serial or :distributed.")
+end
+
+function _ensure_worker_ids(workers)
+    if workers === nothing
+        ids = Distributed.workers()
+        if isempty(ids) || (length(ids) == 1 && only(ids) == 1)
+            return Distributed.addprocs(1; exeflags = _worker_exeflags())
+        end
+        return ids
+    elseif workers isa Integer
+        workers <= 0 && error("workers must be positive for distributed execution")
+        current = Distributed.workers()
+        current = filter(!=(1), current)
+        if length(current) < workers
+            append!(current, Distributed.addprocs(workers - length(current);
+                exeflags = _worker_exeflags()))
+        end
+        return current[1:workers]
+    elseif workers isa AbstractVector{<:Integer}
+        isempty(workers) && error("workers vector cannot be empty")
+        return collect(workers)
+    end
+    error("workers must be nothing, a positive integer, or a vector of worker ids")
+end
+
+function _worker_exeflags()
+    project = Base.active_project()
+    project === nothing && return ""
+    return "--project=$(project)"
+end
+
+function _module_symbol(mod)
+    mod isa Module && return nameof(mod)
+    mod isa Symbol && return mod
+    mod isa AbstractString && return Symbol(mod)
+    error("worker_modules entries must be Modules, Symbols, or strings")
+end
+
+function _prepare_workers(worker_ids::AbstractVector{<:Integer}, worker_modules)
+    modules = unique([:JCGERuntime; [_module_symbol(mod) for mod in worker_modules]])
+    for pid in worker_ids, mod in modules
+        Distributed.remotecall_wait(Base.eval, pid, Main, Expr(:using, Expr(:., mod)))
+    end
+    return worker_ids
+end
 
 """
     compare_to_reference(rows, reference; compare)

@@ -82,6 +82,20 @@ frontier = JCGERuntime.Experiments.frontier_rows(comparison;
 )
 ```
 
+For independent solves, use process-based parallel execution:
+
+```julia
+records = JCGERuntime.Experiments.run_grid(specs;
+    runner = run_experiment,
+    execution = :distributed,
+    workers = 8,
+    worker_modules = [:MyModelPackage],
+)
+```
+
+Serial execution remains the default. Distributed execution preserves result
+order and loads `worker_modules` on each worker before running the batch.
+
 ## How to cite
 
 If you use the JCGE framework, please cite:
