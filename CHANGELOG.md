@@ -10,6 +10,15 @@ Removed: For features removed in this release.
 Fixed: For any bug fixes.
 Security: For vulnerabilities.
 
+## [0.1.1] - 2026-05-18
+### Added
+- `JCGERuntime.Experiments` submodule with generic helpers for parameter and
+  policy grids, batch execution, reference comparisons, closure validation,
+  frontier selection, sensitivity screening, and CSV row export.
+
+### Changed
+- Relaxed `DualSignals` compatibility to the `0.1` series.
+
 ## [0.1.0] - 2026-01-15
 ### Added
 - JuMP-backed runtime module with `KernelContext` registries for variables and equations.

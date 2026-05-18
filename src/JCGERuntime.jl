@@ -14,6 +14,9 @@ export validate_model
 export snapshot, snapshot_state
 export solve!
 export run!
+export Experiments
+
+include("experiments.jl")
 
 """
 Minimal kernel context with registries.

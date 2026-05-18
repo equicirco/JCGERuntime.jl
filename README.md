@@ -49,6 +49,39 @@ report = JCGERuntime.validate_model(result.context; level=:basic)
 report.ok || println(report.categories)
 ```
 
+## Numerical experiment workflows
+`JCGERuntime.Experiments` provides generic helpers for parameter-space and policy
+analysis without requiring a separate package. Model packages provide their own
+experiment objects, row extractors, and indicators; the runtime handles the
+common workflow:
+
+```julia
+specs = JCGERuntime.Experiments.parameter_grid(
+    (label, assignments) -> build_experiment(label, assignments);
+    sigma = [1.5, 2.0, 3.0],
+    tau = [0.0, 0.1, 0.25],
+)
+
+records = JCGERuntime.Experiments.run_grid(specs; runner = run_experiment)
+rows = result_rows(records)
+
+JCGERuntime.Experiments.assert_closure(rows;
+    closure = :fiscal,
+    residual_field = :max_abs_market_residual,
+    residual_tol = 1.0e-5,
+)
+
+comparison = JCGERuntime.Experiments.compare_to_group_reference(rows, [:sigma];
+    reference_filter = row -> row.tau == 0.0,
+    compare = model_specific_comparison,
+)
+frontier = JCGERuntime.Experiments.frontier_rows(comparison;
+    group_by = [:sigma],
+    select_by = :tau,
+    predicate = row -> row.material_saving,
+)
+```
+
 ## How to cite
 
 If you use the JCGE framework, please cite:
