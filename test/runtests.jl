@@ -1,11 +1,52 @@
 using Test
 using JCGERuntime
+using JCGECore
 using JuMP
 
 @testset "JCGERuntime" begin
     ctx = KernelContext()
     report = validate_model(ctx)
     @test report.ok
+end
+
+@testset "AST inequality and log objective compilation" begin
+    model = JuMP.Model()
+    ctx = KernelContext(model = model)
+    x = JuMP.@variable(model, lower_bound = 1.0e-6, start = 1.0, base_name = "x")
+    register_variable!(ctx, :x, x)
+
+    register_equation!(ctx;
+        tag = :upper,
+        block = :test,
+        payload = (
+            indices = (),
+            params = nothing,
+            expr = ELe(EVar(:x), EConst(2.0)),
+            constraint = nothing,
+        ))
+    register_equation!(ctx;
+        tag = :lower,
+        block = :test,
+        payload = (
+            indices = (),
+            params = nothing,
+            expr = EGe(EVar(:x), EConst(0.5)),
+            constraint = nothing,
+        ))
+    register_equation!(ctx;
+        tag = :objective,
+        block = :test,
+        payload = (
+            indices = (),
+            params = nothing,
+            constraint = nothing,
+            objective_expr = ELog(EVar(:x)),
+            objective_sense = :Max,
+        ))
+
+    compile_equations!(ctx)
+    @test all(eq -> eq.payload.constraint !== nothing, ctx.equations[1:2])
+    @test JuMP.objective_sense(model) == JuMP.MOI.MAX_SENSE
 end
 
 @testset "Experiments" begin

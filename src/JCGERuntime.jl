@@ -457,8 +457,18 @@ function _compile_equation(expr::JCGECore.EquationExpr, ctx::KernelContext, para
             return @constraint(ctx.model, lhs - rhs ⟂ var)
         end
         return @constraint(ctx.model, lhs == rhs)
+    elseif expr isa JCGECore.ELe
+        mcp_var === nothing || error("MCP complementarity is only supported for EEq expressions")
+        lhs = _compile_expr(expr.lhs, ctx, params, idxs, env)
+        rhs = _compile_expr(expr.rhs, ctx, params, idxs, env)
+        return @constraint(ctx.model, lhs <= rhs)
+    elseif expr isa JCGECore.EGe
+        mcp_var === nothing || error("MCP complementarity is only supported for EEq expressions")
+        lhs = _compile_expr(expr.lhs, ctx, params, idxs, env)
+        rhs = _compile_expr(expr.rhs, ctx, params, idxs, env)
+        return @constraint(ctx.model, lhs >= rhs)
     end
-    error("Unsupported equation expression: expected EEq, got $(typeof(expr))")
+    error("Unsupported equation expression: expected EEq, ELe, or EGe; got $(typeof(expr))")
 end
 
 """
@@ -517,6 +527,9 @@ function _compile_expr(expr::JCGECore.EquationExpr, ctx::KernelContext, params, 
     elseif expr isa JCGECore.ENeg
         inner = _compile_expr(expr.expr, ctx, params, idxs, env)
         return -inner
+    elseif expr isa JCGECore.ELog
+        inner = _compile_expr(expr.expr, ctx, params, idxs, env)
+        return log(inner)
     elseif expr isa JCGECore.ESum
         if isempty(expr.domain)
             error("ESum domain is empty for index $(expr.index)")

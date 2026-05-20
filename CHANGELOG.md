@@ -10,6 +10,13 @@ Removed: For features removed in this release.
 Fixed: For any bug fixes.
 Security: For vulnerabilities.
 
+## [0.1.3] - 2026-05-20
+### Added
+- Compilation support for `JCGECore.ELe` and `JCGECore.EGe` inequality
+  expressions.
+- Compilation support for `JCGECore.ELog` expressions in equations and
+  objectives.
+
 ## [0.1.2] - 2026-05-18
 ### Added
 - Process-based distributed execution for `JCGERuntime.Experiments.run_grid`

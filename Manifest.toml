@@ -164,17 +164,15 @@ version = "1.0.0"
 
 [[deps.JCGECore]]
 deps = ["Test"]
-git-tree-sha1 = "d9827424c8331758099ba9aff358257e8ac169db"
-repo-rev = "main"
-repo-url = "https://github.com/equicirco/JCGECore.jl"
+git-tree-sha1 = "f08dbf342506f3789a31934439f65dc3591e2741"
 uuid = "9fb9d605-0ed3-4980-82c1-f0874844db5d"
-version = "0.1.0"
+version = "0.1.1"
 
 [[deps.JCGERuntime]]
 deps = ["Distributed", "DualSignals", "JCGECore", "JuMP", "Test"]
 path = "."
 uuid = "cc244198-1562-43f7-ad75-589e1d675269"
-version = "0.1.2"
+version = "0.1.3"
 
 [[deps.JLLWrappers]]
 deps = ["Artifacts", "Preferences"]

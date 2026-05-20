@@ -54,5 +54,19 @@ uses `worker_modules` to load model packages on worker processes.
 
 ## Compilation hooks
 
-Use `compile!` and `build_model!` for advanced workflows that need direct access
-to the JuMP model or solver options.
+Use `compile_equations!` for advanced workflows that need direct access to the
+JuMP model or solver options.
+
+`compile_equations!` compiles backend-neutral equation expressions from
+`JCGECore` into JuMP constraints. It supports equality and inequality relations:
+
+```julia
+EEq(lhs, rhs)  # lhs == rhs
+ELe(lhs, rhs)  # lhs <= rhs
+EGe(lhs, rhs)  # lhs >= rhs
+```
+
+Objective expressions registered through `objective_expr` are compiled into a
+JuMP objective. Natural logarithms can be represented with `ELog(expr)`, so
+log-utility objectives can stay in the JCGE expression tree instead of using
+direct JuMP objective macros.
