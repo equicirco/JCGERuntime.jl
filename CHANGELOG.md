@@ -10,6 +10,14 @@ Removed: For features removed in this release.
 Fixed: For any bug fixes.
 Security: For vulnerabilities.
 
+## [0.1.4] - 2026-07-16
+### Added
+- Generic application of `JCGECore` closure-condition roles during equation
+  compilation. Conditions marked `:accounting_check` are omitted from the
+  solver while retaining their equation metadata.
+- Post-solution evaluation and reporting of registered equation residuals,
+  including accounting checks.
+
 ## [0.1.3] - 2026-05-20
 ### Added
 - Compilation support for `JCGECore.ELe` and `JCGECore.EGe` inequality

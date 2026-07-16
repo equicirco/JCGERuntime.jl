@@ -49,6 +49,54 @@ end
     @test JuMP.objective_sense(model) == JuMP.MOI.MAX_SENSE
 end
 
+@testset "Closure-condition roles and accounting checks" begin
+    model = JuMP.Model()
+    ctx = KernelContext(model = model)
+    x = JuMP.@variable(model, base_name = "x")
+    register_variable!(ctx, :x, x)
+    register_equation!(ctx;
+        tag = :clearing,
+        block = :market,
+        payload = (
+            indices = (:g1, :r1),
+            index_names = (:good, :region),
+            params = nothing,
+            expr = EEq(EVar(:x, Any[]), EConst(2.0)),
+            constraint = nothing,
+        ))
+
+    condition = only(closure_conditions(ctx))
+    @test condition == ClosureCondition(:market, :clearing, :g1, :r1)
+    closure = ClosureSpec(:P_INDEX;
+        condition_roles = Dict(condition => :accounting_check))
+    compile_equations!(ctx; closure = closure)
+    @test ctx.equations[1].payload.constraint === nothing
+    @test ctx.equations[1].payload.condition_role == :accounting_check
+
+    ctx.variables[:x] = 2.0
+    evaluate_residuals!(ctx)
+    residual = only(equation_residuals(ctx))
+    @test residual.role == :accounting_check
+    @test residual.residual == 0.0
+
+    enforced_model = JuMP.Model()
+    enforced = KernelContext(model = enforced_model)
+    y = JuMP.@variable(enforced_model, base_name = "y")
+    register_variable!(enforced, :y, y)
+    register_equation!(enforced;
+        tag = :clearing,
+        block = :market,
+        payload = (
+            indices = (),
+            params = nothing,
+            expr = EEq(EVar(:y), EConst(1.0)),
+            constraint = nothing,
+        ))
+    compile_equations!(enforced)
+    @test only(enforced.equations).payload.constraint !== nothing
+    @test only(enforced.equations).payload.condition_role == :enforce
+end
+
 @testset "Experiments" begin
     specs = Experiments.parameter_grid(; alpha = [1.0, 2.0], beta = [10.0]) do label, assignments
         (label = label, assignments = assignments)

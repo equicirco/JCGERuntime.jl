@@ -8,8 +8,9 @@ using JuMP
 using JCGECore
 
 export KernelContext, register_variable!, register_equation!, list_equations
+export closure_conditions
 export compile_equations!
-export equation_residuals, summarize_residuals, to_dualsignals
+export evaluate_residuals!, equation_residuals, summarize_residuals, to_dualsignals
 export validate_model
 export snapshot, snapshot_state
 export solve!
@@ -45,6 +46,7 @@ end
 Register an equation with tags and an opaque payload.
 """
 function register_equation!(ctx::KernelContext; tag::Symbol, block::Symbol, payload)
+    payload = _with_closure_condition(payload, block, tag)
     push!(ctx.equations, (tag=tag, block=block, payload=payload))
     return nothing
 end
@@ -53,6 +55,24 @@ end
 List registered equations in the context.
 """
 list_equations(ctx::KernelContext) = ctx.equations
+
+"""
+Return the stable closure-condition keys registered for equations in `ctx`.
+
+For an equation with block `:market`, tag `:clearing`, and indices `(:g1, :r1)`,
+the key is `ClosureCondition(:market, :clearing, :g1, :r1)`.
+"""
+function closure_conditions(ctx::KernelContext)
+    conditions = JCGECore.ClosureCondition[]
+    for eq in ctx.equations
+        payload = eq.payload
+        payload isa NamedTuple || continue
+        condition = get(payload, :closure_condition, nothing)
+        condition isa JCGECore.ClosureCondition || continue
+        push!(conditions, condition)
+    end
+    return conditions
+end
 
 """
 Solve the JuMP model attached to the context.
@@ -98,9 +118,11 @@ function run!(spec; optimizer=nothing, dataset_id::String="jcge", tol::Real=1e-6
         end
     end
     if compile_ast
-        compile_equations!(ctx; params=params, compile_objective=compile_objective)
+        compile_equations!(ctx; params=params, closure=spec.closure,
+            compile_objective=compile_objective)
     end
     solve!(ctx; optimizer=optimizer)
+    evaluate_residuals!(ctx; params=params)
     summary = summarize_residuals(ctx; tol=tol)
     signals = to_dualsignals(ctx; dataset_id=dataset_id, tol=tol, description=description)
     return (context=ctx, summary=summary, signals=signals)
@@ -178,14 +200,49 @@ Snapshot start/lower/upper/fixed variable states from a result.
 snapshot_state(result::NamedTuple) = snapshot_state(result.context)
 
 """
-Collect equation residuals from the registry.
+Evaluate registered equation expressions at the current variable values.
+
+Residuals are recorded in the equation payloads. Equality residuals are
+`lhs - rhs`; inequality residuals are positive only when the relation is
+violated. Equations marked as accounting checks remain outside the solver and
+are evaluated by the same mechanism after solution.
+"""
+function evaluate_residuals!(ctx::KernelContext; params=nothing)
+    for i in eachindex(ctx.equations)
+        eq = ctx.equations[i]
+        payload = eq.payload
+        payload isa NamedTuple || continue
+        expr = get(payload, :expr, nothing)
+        expr isa JCGECore.EquationExpr || continue
+        expr isa JCGECore.ERaw && continue
+
+        indices = get(payload, :indices, ())
+        index_names = get(payload, :index_names, nothing)
+        env = _index_env(index_names, indices)
+        local_params = params === nothing ? get(payload, :params, nothing) : params
+        residual = _evaluate_equation_residual(expr, ctx, local_params, indices, env)
+        ctx.equations[i] = (tag=eq.tag, block=eq.block,
+            payload=merge(payload, (residual=residual,)))
+    end
+    return ctx
+end
+
+"""
+Collect recorded equation residuals from the registry.
 """
 function equation_residuals(ctx::KernelContext)
     out = NamedTuple[]
     for eq in ctx.equations
         payload = eq.payload
         if payload isa NamedTuple && haskey(payload, :residual)
-            push!(out, (tag=eq.tag, block=eq.block, indices=get(payload, :indices, ()), residual=payload.residual))
+            push!(out, (
+                tag=eq.tag,
+                block=eq.block,
+                indices=get(payload, :indices, ()),
+                role=get(payload, :condition_role, :enforce),
+                condition=get(payload, :closure_condition, nothing),
+                residual=payload.residual,
+            ))
         end
     end
     return out
@@ -367,8 +424,12 @@ _constraint_sense_enum(sym::Symbol) = _enum_by_name(DualSignals.ConstraintSense,
 Compile registered equations into JuMP constraints/objective.
 
 If `compile_objective` is true, a single objective is compiled.
+When `closure` assigns an equation key the `:accounting_check` role, that
+equation remains in the registry but is not compiled as a solver constraint.
 """
-function compile_equations!(ctx::KernelContext; params=nothing, compile_objective::Bool=true)
+function compile_equations!(ctx::KernelContext; params=nothing,
+    closure::Union{Nothing,JCGECore.ClosureSpec}=nothing,
+    compile_objective::Bool=true)
     model = ctx.model
     model isa JuMP.Model || return ctx
     local_objective = nothing
@@ -385,6 +446,7 @@ function compile_equations!(ctx::KernelContext; params=nothing, compile_objectiv
         index_names = get(payload, :index_names, nothing)
         indices = get(payload, :indices, ())
         constraint = get(payload, :constraint, nothing)
+        role = _closure_role(closure, payload)
         if objective_expr !== nothing
             if local_objective !== nothing
                 error("Multiple objectives registered; only one objective is supported.")
@@ -392,6 +454,14 @@ function compile_equations!(ctx::KernelContext; params=nothing, compile_objectiv
             local_objective = (expr=objective_expr, index_names=index_names, indices=indices,
                 params=get(payload, :params, nothing))
             local_sense = objective_sense === nothing ? :Max : objective_sense
+        end
+        if role == :accounting_check && expr isa JCGECore.EquationExpr
+            constraint === nothing || error(
+                "Cannot reclassify an already compiled equation as an accounting check; " *
+                "build a fresh KernelContext.")
+            ctx.equations[i] = (tag=eq.tag, block=eq.block,
+                payload=merge(payload, (condition_role=role, constraint=nothing)))
+            continue
         end
         if constraint !== nothing
             continue
@@ -401,7 +471,7 @@ function compile_equations!(ctx::KernelContext; params=nothing, compile_objectiv
             local_params = params === nothing ? get(payload, :params, nothing) : params
             mcp_var = get(payload, :mcp_var, nothing)
             new_constraint = _compile_equation(expr, ctx, local_params, indices, env; mcp_var=mcp_var)
-            new_payload = merge(payload, (constraint=new_constraint,))
+            new_payload = merge(payload, (condition_role=role, constraint=new_constraint,))
             ctx.equations[i] = (tag=eq.tag, block=eq.block, payload=new_payload)
         end
     end
@@ -557,6 +627,76 @@ function _compile_expr(expr::JCGECore.EquationExpr, ctx::KernelContext, params, 
     end
 end
 
+function _evaluate_equation_residual(expr::JCGECore.EquationExpr,
+    ctx::KernelContext, params, idxs, env::Dict{Symbol,Symbol})
+    if expr isa JCGECore.EEq
+        return _evaluate_expr(expr.lhs, ctx, params, idxs, env) -
+               _evaluate_expr(expr.rhs, ctx, params, idxs, env)
+    elseif expr isa JCGECore.ELe
+        return max(_evaluate_expr(expr.lhs, ctx, params, idxs, env) -
+                   _evaluate_expr(expr.rhs, ctx, params, idxs, env), 0.0)
+    elseif expr isa JCGECore.EGe
+        return max(_evaluate_expr(expr.rhs, ctx, params, idxs, env) -
+                   _evaluate_expr(expr.lhs, ctx, params, idxs, env), 0.0)
+    end
+    error("Residual evaluation requires EEq, ELe, or EGe; got $(typeof(expr))")
+end
+
+function _evaluate_expr(expr::JCGECore.EquationExpr, ctx::KernelContext, params,
+    idxs, env::Dict{Symbol,Symbol})
+    if expr isa JCGECore.EVar
+        resolved = _resolve_indices(expr.idxs, idxs, env)
+        return _value_of(_resolve_var(ctx, expr.name, resolved))
+    elseif expr isa JCGECore.EParam
+        resolved = _resolve_indices(expr.idxs, idxs, env)
+        return _resolve_param(params, expr.name, resolved)
+    elseif expr isa JCGECore.EConst
+        return expr.value
+    elseif expr isa JCGECore.ERaw
+        error("Cannot evaluate ERaw expression: $(expr.text)")
+    elseif expr isa JCGECore.EIndex
+        haskey(env, expr.name) || error("Unbound index: $(expr.name)")
+        return env[expr.name]
+    elseif expr isa JCGECore.EAdd
+        return sum((_evaluate_expr(term, ctx, params, idxs, env) for term in expr.terms); init=0.0)
+    elseif expr isa JCGECore.EMul
+        return foldl(*, (_evaluate_expr(factor, ctx, params, idxs, env) for factor in expr.factors))
+    elseif expr isa JCGECore.EPow
+        return _evaluate_expr(expr.base, ctx, params, idxs, env) ^
+               _evaluate_expr(expr.exponent, ctx, params, idxs, env)
+    elseif expr isa JCGECore.EDiv
+        return _evaluate_expr(expr.numerator, ctx, params, idxs, env) /
+               _evaluate_expr(expr.denominator, ctx, params, idxs, env)
+    elseif expr isa JCGECore.ENeg
+        return -_evaluate_expr(expr.expr, ctx, params, idxs, env)
+    elseif expr isa JCGECore.ELog
+        return log(_evaluate_expr(expr.expr, ctx, params, idxs, env))
+    elseif expr isa JCGECore.ESum
+        isempty(expr.domain) && error("ESum domain is empty for index $(expr.index)")
+        values = Float64[]
+        for value in expr.domain
+            env[expr.index] = value
+            push!(values, _evaluate_expr(expr.expr, ctx, params, idxs, env))
+        end
+        delete!(env, expr.index)
+        return sum(values)
+    elseif expr isa JCGECore.EProd
+        isempty(expr.domain) && error("EProd domain is empty for index $(expr.index)")
+        values = Float64[]
+        for value in expr.domain
+            env[expr.index] = value
+            push!(values, _evaluate_expr(expr.expr, ctx, params, idxs, env))
+        end
+        delete!(env, expr.index)
+        return prod(values)
+    end
+    error("Unsupported expression type: $(typeof(expr))")
+end
+
+_value_of(value::Number) = value
+_value_of(value::JuMP.VariableRef) = JuMP.value(value)
+_value_of(value) = error("Cannot evaluate nonnumeric variable handle $(typeof(value))")
+
 """
 Resolve a variable reference by name and indices.
 """
@@ -586,6 +726,24 @@ Resolve a parameter reference by name and indices.
 function _resolve_param(params, name::Symbol, idxs::Vector{Symbol})
     params === nothing && error("No params provided for parameter $(name)")
     return JCGECore.getparam(params, name, idxs...)
+end
+
+function _with_closure_condition(payload, block::Symbol, tag::Symbol)
+    payload isa NamedTuple || return payload
+    haskey(payload, :closure_condition) && return payload
+    indices = get(payload, :indices, ())
+    values = indices isa Tuple || indices isa AbstractVector ? collect(indices) : Any[]
+    all(index -> index isa Symbol, values) || return payload
+    condition = JCGECore.ClosureCondition(block, tag, Symbol[values...]...)
+    return merge(payload, (closure_condition=condition,))
+end
+
+function _closure_role(closure, payload)
+    closure === nothing && return :enforce
+    condition = get(payload, :closure_condition, nothing)
+    condition isa JCGECore.ClosureCondition || return :enforce
+    return JCGECore.closure_condition_role(closure, condition.block, condition.tag,
+        condition.indices...)
 end
 
 """

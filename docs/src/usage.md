@@ -70,3 +70,24 @@ Objective expressions registered through `objective_expr` are compiled into a
 JuMP objective. Natural logarithms can be represented with `ELog(expr)`, so
 log-utility objectives can stay in the JCGE expression tree instead of using
 direct JuMP objective macros.
+
+## Closure conditions and accounting checks
+
+Every registered equation receives a stable key from its block name, tag, and
+indices. A model can retain an identity in its equation inventory while asking
+the runtime to evaluate it after solution rather than impose it on the solver:
+
+```julia
+using JCGECore: ClosureCondition, ClosureSpec
+
+check = ClosureCondition(:investment_pool, :investment_pool_clearing)
+closure = ClosureSpec(:P_HH_COMMON;
+    kind = :price_index,
+    condition_roles = Dict(check => :accounting_check),
+)
+```
+
+Pass the closure to `compile_equations!`, or use `run!`, which does so
+automatically. After `solve!`, call `evaluate_residuals!` to record residuals;
+`run!` performs this step automatically. `closure_conditions(ctx)` lists the
+keys registered in a built model.
