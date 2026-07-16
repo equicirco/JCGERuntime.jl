@@ -371,7 +371,7 @@ function to_dualsignals(ctx::KernelContext; dataset_id::String="jcge",
         constraint_id = string(r.block, ":", r.tag, ":", join(string.(r.indices), ","))
         push!(constraints, DualSignals.Constraint(
             constraint_id=constraint_id,
-            kind=_constraint_kind_enum(:other),
+            kind=_constraint_kind_enum(:other_constraint),
             sense=_constraint_sense_enum(:eq),
             component_ids=[component_id],
         ))

@@ -1,7 +1,7 @@
 name = "JCGERuntime"
 uuid = "cc244198-1562-43f7-ad75-589e1d675269"
 authors = ["Riccardo Boero <ribo@nilu.no>"]
-version = "0.1.4"
+version = "0.1.5"
 
 [deps]
 Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
@@ -11,7 +11,7 @@ JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [compat]
-DualSignals = "0.1"
+DualSignals = "0.1.3"
 JCGECore = "0.1.3"
 JuMP = "1"
 julia = "1.10"

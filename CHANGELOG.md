@@ -10,6 +10,11 @@ Removed: For features removed in this release.
 Fixed: For any bug fixes.
 Security: For vulnerabilities.
 
+## [0.1.5] - 2026-07-16
+### Fixed
+- Restored DualSignals residual export with DualSignals 0.1.3 by using its
+  unambiguous `ConstraintKind.other_constraint` fallback kind.
+
 ## [0.1.4] - 2026-07-16
 ### Added
 - Generic application of `JCGECore` closure-condition roles during equation

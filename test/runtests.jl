@@ -78,6 +78,8 @@ end
     residual = only(equation_residuals(ctx))
     @test residual.role == :accounting_check
     @test residual.residual == 0.0
+    signals = to_dualsignals(ctx)
+    @test string(only(signals.constraints).kind) == "other_constraint"
 
     enforced_model = JuMP.Model()
     enforced = KernelContext(model = enforced_model)
