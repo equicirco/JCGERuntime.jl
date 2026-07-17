@@ -49,6 +49,28 @@ report = JCGERuntime.validate_model(result.context; level=:basic)
 report.ok || println(report.categories)
 ```
 
+## Calibration diagnostics and equation scaling
+Before solving, a model can evaluate its registered equations directly at the
+declared variable starting values. This identifies calibration inconsistencies
+without conflating them with solver behaviour:
+
+```julia
+evaluate_start_residuals!(ctx; params=params)
+summary = summarize_residuals(ctx)
+```
+
+For models whose calibrated values span very different magnitudes, request
+per-equation scaling during compilation. Each condition is divided by the
+larger absolute side at the declared start point; this leaves the solution set
+unchanged while improving numerical conditioning:
+
+```julia
+compile_equations!(ctx; params=params, equation_scaling=:calibrated)
+```
+
+Use `calibrated_equation_scaling(ctx; params=params)` to inspect or retain the
+generated positive scale for each registered equation.
+
 ## Numerical experiment workflows
 `JCGERuntime.Experiments` provides generic helpers for parameter-space and policy
 analysis without requiring a separate package. Model packages provide their own

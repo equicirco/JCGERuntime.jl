@@ -91,3 +91,28 @@ Pass the closure to `compile_equations!`, or use `run!`, which does so
 automatically. After `solve!`, call `evaluate_residuals!` to record residuals;
 `run!` performs this step automatically. `closure_conditions(ctx)` lists the
 keys registered in a built model.
+
+## Calibration diagnostics and equation scaling
+
+`evaluate_start_residuals!` evaluates registered equations at their declared
+JuMP starting values. It is useful for verifying a calibration before a solver
+is involved:
+
+```julia
+evaluate_start_residuals!(ctx; params=params)
+summary = summarize_residuals(ctx)
+```
+
+When calibrated conditions span very different numerical magnitudes, compile
+with `equation_scaling = :calibrated`:
+
+```julia
+compile_equations!(ctx; params=params, equation_scaling=:calibrated)
+```
+
+Each equality, inequality, or MCP complementarity condition is divided by the
+larger absolute side of that condition at the start point. The positive scale
+does not alter the feasible set, but it can make solver tolerances meaningful
+across a model with very small and very large calibrated flows. Retrieve the
+same per-equation scales with `calibrated_equation_scaling(ctx; params=params)`
+when a model needs to inspect or reuse them.

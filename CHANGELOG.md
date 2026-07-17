@@ -10,6 +10,17 @@ Removed: For features removed in this release.
 Fixed: For any bug fixes.
 Security: For vulnerabilities.
 
+## [0.1.6] - 2026-07-17
+### Added
+- Optional calibrated equation scaling during JuMP compilation through
+  `equation_scaling = :calibrated`. Each equality, inequality, or MCP
+  complementarity condition is divided by a positive magnitude derived from
+  its declared start point, without changing the model solution set.
+- `calibrated_equation_scaling` for inspecting or reusing the generated
+  per-equation scales.
+- `evaluate_start_residuals!` for checking registered equations directly at
+  their declared starting values before solving.
+
 ## [0.1.5] - 2026-07-16
 ### Fixed
 - Restored DualSignals residual export with DualSignals 0.1.3 by using its

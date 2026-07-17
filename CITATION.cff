@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 title: JCGERuntime.jl - Runtime execution and solver integration for JCGE models.
 message: >-
-  v0.1.5 - Restores DualSignals residual export with the current constraint-kind schema.
+  v0.1.6 - Adds calibrated equation scaling and direct start-point residual diagnostics.
 type: software
 doi: 10.5281/zenodo.18258034
 authors:

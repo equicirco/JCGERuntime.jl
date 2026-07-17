@@ -10,7 +10,8 @@ using JCGECore
 export KernelContext, register_variable!, register_equation!, list_equations
 export closure_conditions
 export compile_equations!
-export evaluate_residuals!, equation_residuals, summarize_residuals, to_dualsignals
+export evaluate_residuals!, evaluate_start_residuals!, calibrated_equation_scaling
+export equation_residuals, summarize_residuals, to_dualsignals
 export validate_model
 export snapshot, snapshot_state
 export solve!
@@ -104,7 +105,7 @@ Returns a NamedTuple with:
 """
 function run!(spec; optimizer=nothing, dataset_id::String="jcge", tol::Real=1e-6,
     description::Union{String,Nothing}=nothing, compile_ast::Bool=true, params=nothing,
-    compile_objective::Bool=true, mcp_fix=nothing)
+    compile_objective::Bool=true, equation_scaling=nothing, mcp_fix=nothing)
     model = JuMP.Model()
     ctx = KernelContext(model=model)
     for block in spec.model.blocks
@@ -119,7 +120,7 @@ function run!(spec; optimizer=nothing, dataset_id::String="jcge", tol::Real=1e-6
     end
     if compile_ast
         compile_equations!(ctx; params=params, closure=spec.closure,
-            compile_objective=compile_objective)
+            compile_objective=compile_objective, equation_scaling=equation_scaling)
     end
     solve!(ctx; optimizer=optimizer)
     evaluate_residuals!(ctx; params=params)
@@ -207,7 +208,8 @@ Residuals are recorded in the equation payloads. Equality residuals are
 violated. Equations marked as accounting checks remain outside the solver and
 are evaluated by the same mechanism after solution.
 """
-function evaluate_residuals!(ctx::KernelContext; params=nothing)
+function evaluate_residuals!(ctx::KernelContext; params=nothing, at::Symbol=:solution)
+    at in (:solution, :start) || error("Residuals can be evaluated only at :solution or :start.")
     for i in eachindex(ctx.equations)
         eq = ctx.equations[i]
         payload = eq.payload
@@ -220,12 +222,21 @@ function evaluate_residuals!(ctx::KernelContext; params=nothing)
         index_names = get(payload, :index_names, nothing)
         env = _index_env(index_names, indices)
         local_params = params === nothing ? get(payload, :params, nothing) : params
-        residual = _evaluate_equation_residual(expr, ctx, local_params, indices, env)
+        residual = _evaluate_equation_residual(expr, ctx, local_params, indices, env; at=at)
         ctx.equations[i] = (tag=eq.tag, block=eq.block,
             payload=merge(payload, (residual=residual,)))
     end
     return ctx
 end
+
+"""
+    evaluate_start_residuals!(ctx; params=nothing)
+
+Evaluate registered equation expressions at the JuMP starting values rather
+than a solver solution. Every referenced JuMP variable must have a start value.
+"""
+evaluate_start_residuals!(ctx::KernelContext; params=nothing) =
+    evaluate_residuals!(ctx; params=params, at=:start)
 
 """
 Collect recorded equation residuals from the registry.
@@ -426,12 +437,20 @@ Compile registered equations into JuMP constraints/objective.
 If `compile_objective` is true, a single objective is compiled.
 When `closure` assigns an equation key the `:accounting_check` role, that
 equation remains in the registry but is not compiled as a solver constraint.
+Set `equation_scaling=:calibrated` to scale each compiled equation by its
+calibrated start-point magnitude without altering its solution set. A custom
+dictionary returned by [`calibrated_equation_scaling`](@ref) may also be
+provided.
 """
 function compile_equations!(ctx::KernelContext; params=nothing,
     closure::Union{Nothing,JCGECore.ClosureSpec}=nothing,
-    compile_objective::Bool=true)
+    compile_objective::Bool=true, equation_scaling=nothing)
     model = ctx.model
     model isa JuMP.Model || return ctx
+    scaling = equation_scaling === :calibrated ?
+        calibrated_equation_scaling(ctx; params=params) : equation_scaling
+    scaling === nothing || scaling isa AbstractDict ||
+        error("equation_scaling must be nothing, :calibrated, or a dictionary returned by calibrated_equation_scaling.")
     local_objective = nothing
     local_sense = nothing
     for i in eachindex(ctx.equations)
@@ -470,8 +489,14 @@ function compile_equations!(ctx::KernelContext; params=nothing,
             env = _index_env(index_names, indices)
             local_params = params === nothing ? get(payload, :params, nothing) : params
             mcp_var = get(payload, :mcp_var, nothing)
-            new_constraint = _compile_equation(expr, ctx, local_params, indices, env; mcp_var=mcp_var)
-            new_payload = merge(payload, (condition_role=role, constraint=new_constraint,))
+            scale = _equation_scale(scaling, eq, payload)
+            new_constraint = _compile_equation(expr, ctx, local_params, indices, env;
+                mcp_var=mcp_var, scale=scale)
+            new_payload = merge(payload, (
+                condition_role=role,
+                constraint=new_constraint,
+                equation_scale=scale,
+            ))
             ctx.equations[i] = (tag=eq.tag, block=eq.block, payload=new_payload)
         end
     end
@@ -479,6 +504,77 @@ function compile_equations!(ctx::KernelContext; params=nothing,
         _compile_objective!(ctx, local_objective; params=params, sense=local_sense)
     end
     return ctx
+end
+
+"""
+    calibrated_equation_scaling(ctx; params=nothing, floor=nothing)
+
+Return positive per-equation scaling factors derived from the model's declared
+starting values. Each factor is the larger absolute side of its equation at
+the start point. Equations whose two sides are zero use the smallest positive
+factor observed across the system, or `floor` when provided.
+"""
+function calibrated_equation_scaling(ctx::KernelContext; params=nothing,
+    floor::Union{Nothing,Real}=nothing)
+    magnitudes = Dict{Tuple{Symbol,Symbol,Tuple},Float64}()
+    for eq in ctx.equations
+        payload = eq.payload
+        payload isa NamedTuple || continue
+        expr = get(payload, :expr, nothing)
+        expr isa JCGECore.EquationExpr || continue
+        expr isa JCGECore.ERaw && continue
+        indices = get(payload, :indices, ())
+        index_names = get(payload, :index_names, nothing)
+        env = _index_env(index_names, indices)
+        local_params = params === nothing ? get(payload, :params, nothing) : params
+        magnitudes[_equation_scaling_key(eq, payload)] =
+            _equation_start_magnitude(expr, ctx, local_params, indices, env)
+    end
+    isempty(magnitudes) && return magnitudes
+    positive = filter(>(0.0), collect(values(magnitudes)))
+    default_floor = isempty(positive) ? 1.0 : minimum(positive)
+    chosen_floor = floor === nothing ? default_floor : Float64(floor)
+    isfinite(chosen_floor) && chosen_floor > 0.0 ||
+        error("Equation-scaling floor must be finite and strictly positive.")
+    return Dict(key => max(value, chosen_floor) for (key, value) in magnitudes)
+end
+
+"""
+Return the stable key used to associate a registered equation with a scale.
+"""
+function _equation_scaling_key(eq, payload)
+    indices = get(payload, :indices, ())
+    values = indices isa Tuple ? indices :
+        indices isa AbstractVector ? Tuple(indices) : ()
+    return (eq.block, eq.tag, Tuple(Symbol(value) for value in values))
+end
+
+"""
+Return the absolute magnitude of the larger side of an equation at its start point.
+"""
+function _equation_start_magnitude(expr::JCGECore.EquationExpr,
+    ctx::KernelContext, params, idxs, env::Dict{Symbol,Symbol})
+    if expr isa JCGECore.EEq || expr isa JCGECore.ELe || expr isa JCGECore.EGe
+        lhs = Float64(_evaluate_expr(expr.lhs, ctx, params, idxs, env; at=:start))
+        rhs = Float64(_evaluate_expr(expr.rhs, ctx, params, idxs, env; at=:start))
+        magnitude = max(abs(lhs), abs(rhs))
+        isfinite(magnitude) || error("Cannot derive an equation scale from a non-finite start value.")
+        return magnitude
+    end
+    error("Equation scaling requires EEq, ELe, or EGe; got $(typeof(expr))")
+end
+
+"""
+Return a validated scale for one registered equation.
+"""
+function _equation_scale(scaling, eq, payload)
+    scaling === nothing && return 1.0
+    scale = get(scaling, _equation_scaling_key(eq, payload), 1.0)
+    scale isa Real || error("Equation scale must be a real number.")
+    scale = Float64(scale)
+    isfinite(scale) && scale > 0.0 ||
+        error("Equation scale must be finite and strictly positive.")
+    return scale
 end
 
 """
@@ -518,25 +614,29 @@ end
 """
 Compile a single equation expression into a JuMP constraint.
 """
-function _compile_equation(expr::JCGECore.EquationExpr, ctx::KernelContext, params, idxs, env::Dict{Symbol,Symbol}; mcp_var=nothing)
+function _compile_equation(expr::JCGECore.EquationExpr, ctx::KernelContext, params,
+    idxs, env::Dict{Symbol,Symbol}; mcp_var=nothing, scale::Real=1.0)
+    scale = Float64(scale)
+    isfinite(scale) && scale > 0.0 ||
+        error("Equation scale must be finite and strictly positive.")
     if expr isa JCGECore.EEq
         lhs = _compile_expr(expr.lhs, ctx, params, idxs, env)
         rhs = _compile_expr(expr.rhs, ctx, params, idxs, env)
         if mcp_var !== nothing
             var = _compile_mcp_var(mcp_var, ctx, params, idxs, env)
-            return @constraint(ctx.model, lhs - rhs ⟂ var)
+            return @constraint(ctx.model, (lhs - rhs) / scale ⟂ var)
         end
-        return @constraint(ctx.model, lhs == rhs)
+        return @constraint(ctx.model, lhs / scale == rhs / scale)
     elseif expr isa JCGECore.ELe
         mcp_var === nothing || error("MCP complementarity is only supported for EEq expressions")
         lhs = _compile_expr(expr.lhs, ctx, params, idxs, env)
         rhs = _compile_expr(expr.rhs, ctx, params, idxs, env)
-        return @constraint(ctx.model, lhs <= rhs)
+        return @constraint(ctx.model, lhs / scale <= rhs / scale)
     elseif expr isa JCGECore.EGe
         mcp_var === nothing || error("MCP complementarity is only supported for EEq expressions")
         lhs = _compile_expr(expr.lhs, ctx, params, idxs, env)
         rhs = _compile_expr(expr.rhs, ctx, params, idxs, env)
-        return @constraint(ctx.model, lhs >= rhs)
+        return @constraint(ctx.model, lhs / scale >= rhs / scale)
     end
     error("Unsupported equation expression: expected EEq, ELe, or EGe; got $(typeof(expr))")
 end
@@ -628,25 +728,25 @@ function _compile_expr(expr::JCGECore.EquationExpr, ctx::KernelContext, params, 
 end
 
 function _evaluate_equation_residual(expr::JCGECore.EquationExpr,
-    ctx::KernelContext, params, idxs, env::Dict{Symbol,Symbol})
+    ctx::KernelContext, params, idxs, env::Dict{Symbol,Symbol}; at::Symbol=:solution)
     if expr isa JCGECore.EEq
-        return _evaluate_expr(expr.lhs, ctx, params, idxs, env) -
-               _evaluate_expr(expr.rhs, ctx, params, idxs, env)
+        return _evaluate_expr(expr.lhs, ctx, params, idxs, env; at=at) -
+               _evaluate_expr(expr.rhs, ctx, params, idxs, env; at=at)
     elseif expr isa JCGECore.ELe
-        return max(_evaluate_expr(expr.lhs, ctx, params, idxs, env) -
-                   _evaluate_expr(expr.rhs, ctx, params, idxs, env), 0.0)
+        return max(_evaluate_expr(expr.lhs, ctx, params, idxs, env; at=at) -
+                   _evaluate_expr(expr.rhs, ctx, params, idxs, env; at=at), 0.0)
     elseif expr isa JCGECore.EGe
-        return max(_evaluate_expr(expr.rhs, ctx, params, idxs, env) -
-                   _evaluate_expr(expr.lhs, ctx, params, idxs, env), 0.0)
+        return max(_evaluate_expr(expr.rhs, ctx, params, idxs, env; at=at) -
+                   _evaluate_expr(expr.lhs, ctx, params, idxs, env; at=at), 0.0)
     end
     error("Residual evaluation requires EEq, ELe, or EGe; got $(typeof(expr))")
 end
 
 function _evaluate_expr(expr::JCGECore.EquationExpr, ctx::KernelContext, params,
-    idxs, env::Dict{Symbol,Symbol})
+    idxs, env::Dict{Symbol,Symbol}; at::Symbol=:solution)
     if expr isa JCGECore.EVar
         resolved = _resolve_indices(expr.idxs, idxs, env)
-        return _value_of(_resolve_var(ctx, expr.name, resolved))
+        return _value_of(_resolve_var(ctx, expr.name, resolved), at)
     elseif expr isa JCGECore.EParam
         resolved = _resolve_indices(expr.idxs, idxs, env)
         return _resolve_param(params, expr.name, resolved)
@@ -658,25 +758,25 @@ function _evaluate_expr(expr::JCGECore.EquationExpr, ctx::KernelContext, params,
         haskey(env, expr.name) || error("Unbound index: $(expr.name)")
         return env[expr.name]
     elseif expr isa JCGECore.EAdd
-        return sum((_evaluate_expr(term, ctx, params, idxs, env) for term in expr.terms); init=0.0)
+        return sum((_evaluate_expr(term, ctx, params, idxs, env; at=at) for term in expr.terms); init=0.0)
     elseif expr isa JCGECore.EMul
-        return foldl(*, (_evaluate_expr(factor, ctx, params, idxs, env) for factor in expr.factors))
+        return foldl(*, (_evaluate_expr(factor, ctx, params, idxs, env; at=at) for factor in expr.factors))
     elseif expr isa JCGECore.EPow
-        return _evaluate_expr(expr.base, ctx, params, idxs, env) ^
-               _evaluate_expr(expr.exponent, ctx, params, idxs, env)
+        return _evaluate_expr(expr.base, ctx, params, idxs, env; at=at) ^
+               _evaluate_expr(expr.exponent, ctx, params, idxs, env; at=at)
     elseif expr isa JCGECore.EDiv
-        return _evaluate_expr(expr.numerator, ctx, params, idxs, env) /
-               _evaluate_expr(expr.denominator, ctx, params, idxs, env)
+        return _evaluate_expr(expr.numerator, ctx, params, idxs, env; at=at) /
+               _evaluate_expr(expr.denominator, ctx, params, idxs, env; at=at)
     elseif expr isa JCGECore.ENeg
-        return -_evaluate_expr(expr.expr, ctx, params, idxs, env)
+        return -_evaluate_expr(expr.expr, ctx, params, idxs, env; at=at)
     elseif expr isa JCGECore.ELog
-        return log(_evaluate_expr(expr.expr, ctx, params, idxs, env))
+        return log(_evaluate_expr(expr.expr, ctx, params, idxs, env; at=at))
     elseif expr isa JCGECore.ESum
         isempty(expr.domain) && error("ESum domain is empty for index $(expr.index)")
         values = Float64[]
         for value in expr.domain
             env[expr.index] = value
-            push!(values, _evaluate_expr(expr.expr, ctx, params, idxs, env))
+            push!(values, _evaluate_expr(expr.expr, ctx, params, idxs, env; at=at))
         end
         delete!(env, expr.index)
         return sum(values)
@@ -685,7 +785,7 @@ function _evaluate_expr(expr::JCGECore.EquationExpr, ctx::KernelContext, params,
         values = Float64[]
         for value in expr.domain
             env[expr.index] = value
-            push!(values, _evaluate_expr(expr.expr, ctx, params, idxs, env))
+            push!(values, _evaluate_expr(expr.expr, ctx, params, idxs, env; at=at))
         end
         delete!(env, expr.index)
         return prod(values)
@@ -693,9 +793,21 @@ function _evaluate_expr(expr::JCGECore.EquationExpr, ctx::KernelContext, params,
     error("Unsupported expression type: $(typeof(expr))")
 end
 
-_value_of(value::Number) = value
-_value_of(value::JuMP.VariableRef) = JuMP.value(value)
-_value_of(value) = error("Cannot evaluate nonnumeric variable handle $(typeof(value))")
+_value_of(value::Number, at::Symbol) = value
+
+function _value_of(value::JuMP.VariableRef, at::Symbol)
+    if at === :solution
+        return JuMP.value(value)
+    elseif at === :start
+        start = JuMP.start_value(value)
+        start === nothing && error("Missing start value for $(JuMP.name(value)).")
+        return start
+    end
+    error("Unsupported evaluation point: $(at)")
+end
+
+_value_of(value, at::Symbol) =
+    error("Cannot evaluate nonnumeric variable handle $(typeof(value))")
 
 """
 Resolve a variable reference by name and indices.

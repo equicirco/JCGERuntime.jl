@@ -49,6 +49,32 @@ end
     @test JuMP.objective_sense(model) == JuMP.MOI.MAX_SENSE
 end
 
+@testset "Calibrated equation scaling and start residuals" begin
+    model = JuMP.Model()
+    ctx = KernelContext(model = model)
+    x = JuMP.@variable(model, lower_bound = 0.0, start = 1_000.0, base_name = "x")
+    register_variable!(ctx, :x, x)
+    register_equation!(ctx;
+        tag = :calibration,
+        block = :test,
+        payload = (
+            indices = (),
+            params = nothing,
+            expr = EEq(EVar(:x), EConst(1_000.0)),
+            constraint = nothing,
+        ))
+
+    evaluate_start_residuals!(ctx)
+    @test only(equation_residuals(ctx)).residual == 0.0
+
+    scaling = calibrated_equation_scaling(ctx)
+    @test only(values(scaling)) == 1_000.0
+    compile_equations!(ctx; equation_scaling = :calibrated)
+    payload = only(ctx.equations).payload
+    @test payload.equation_scale == 1_000.0
+    @test payload.constraint !== nothing
+end
+
 @testset "Closure-condition roles and accounting checks" begin
     model = JuMP.Model()
     ctx = KernelContext(model = model)
