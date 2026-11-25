@@ -172,7 +172,7 @@ version = "0.1.3"
 deps = ["Distributed", "DualSignals", "JCGECore", "JuMP", "Test"]
 path = "."
 uuid = "cc244198-1562-43f7-ad75-589e1d675269"
-version = "0.1.5"
+version = "0.1.7"
 
 [[deps.JLLWrappers]]
 deps = ["Artifacts", "Preferences"]

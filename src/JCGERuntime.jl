@@ -682,7 +682,9 @@ function _compile_expr(expr::JCGECore.EquationExpr, ctx::KernelContext, params, 
         return env[expr.name]
     elseif expr isa JCGECore.EAdd
         parts = map(t -> _compile_expr(t, ctx, params, idxs, env), expr.terms)
-        return sum(parts; init=0.0)
+        # Fold actual expression values; sum may try zero(Any) for abstract
+        # JuMP scalar arrays containing different symbolic expression types.
+        return foldl(+, parts; init=0.0)
     elseif expr isa JCGECore.EMul
         parts = map(t -> _compile_expr(t, ctx, params, idxs, env), expr.factors)
         return foldl(*, parts)
@@ -710,7 +712,7 @@ function _compile_expr(expr::JCGECore.EquationExpr, ctx::KernelContext, params, 
             push!(parts, _compile_expr(expr.expr, ctx, params, idxs, env))
         end
         delete!(env, expr.index)
-        return sum(parts)
+        return foldl(+, parts)
     elseif expr isa JCGECore.EProd
         if isempty(expr.domain)
             error("EProd domain is empty for index $(expr.index)")

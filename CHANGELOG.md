@@ -10,6 +10,17 @@ Removed: For features removed in this release.
 Fixed: For any bug fixes.
 Security: For vulnerabilities.
 
+## [0.1.7] - 2026-11-25
+### Fixed
+- Compile additions and indexed sums by accumulating their actual expression
+  values, avoiding `zero(Any)` errors for heterogeneous JuMP symbolic terms.
+
+### Added
+- Regression coverage for mixed affine, quadratic, and nonlinear sums, nested
+  indexed sums and products, objectives, and empty-addition behavior.
+- CI checks against both the locked dependencies and their latest compatible
+  versions.
+
 ## [0.1.6] - 2026-07-17
 ### Added
 - Optional calibrated equation scaling during JuMP compilation through

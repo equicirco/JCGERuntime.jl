@@ -3,6 +3,8 @@ using JCGERuntime
 using JCGECore
 using JuMP
 
+include("symbolic_sums.jl")
+
 @testset "JCGERuntime" begin
     ctx = KernelContext()
     report = validate_model(ctx)
